@@ -1,0 +1,66 @@
+name: Dashboard Emitibilidad - Daily Update
+
+on:
+  schedule:
+    - cron: '0 13 * * 1-5'   # 9 AM Chile (Lun-Vie)
+  workflow_dispatch:
+    inputs:
+      force_date:
+        description: 'Fecha override (YYYY-MM-DD). Dejar vacio para hoy.'
+        required: false
+        default: ''
+
+env:
+  PYTHON_VERSION: '3.11'
+  CARD_ID: '152536'
+
+jobs:
+  update-dashboard:
+    name: Update Emitibilidad Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Export Metabase card ${{ env.CARD_ID }}
+        env:
+          METABASE_URL:     ${{ secrets.METABASE_URL }}
+          METABASE_SESSION: ${{ secrets.METABASE_SESSION }}
+        run: |
+          python scripts/export_metabase.py \
+            --card-id ${{ env.CARD_ID }} \
+            --out-path data/raw/emitibilidad_raw.csv.gz
+
+      - name: Build HTML dashboard
+        env:
+          FORCE_DATE: ${{ github.event.inputs.force_date }}
+        run: |
+          python scripts/build_dashboard.py \
+            --input  data/raw/emitibilidad_raw.csv.gz \
+            --output docs/Dashboard_Emitibilidad.html
+
+      - run: python scripts/validate_dashboard.py --path docs/Dashboard_Emitibilidad.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-emitibilidad-${{ github.run_id }}
+          path: docs/Dashboard_Emitibilidad.html
+          retention-days: 30
+
+      - name: Commit updated dashboard
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/Dashboard_Emitibilidad.html data/raw/emitibilidad_raw.csv.gz
+          git diff --cached --quiet || git commit -m "chore(dashboard): auto-update emitibilidad $(TZ=America/Santiago date +'%Y-%m-%d %H:%M CLT')"
+          git push
